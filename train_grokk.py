@@ -153,13 +153,13 @@ def procrustes_calculations(model, step, dataset, config):
         for height in torch.linspace(0.1, 2, 40):
             A = create_circle_matrix(height)
 
-            M = W @ A.T
+            W_centered = W - W.mean(dim=0, keepdim=True)
+            
+            M = A.T @ W_centered  # (3 × 3)
             U, S, Vt = torch.linalg.svd(M)
+            O = U @ Vt  # (3 × 3)
 
-            #Optimal orthogonal matrix:
-            Q = U @ Vt
-
-            pro_distance = torch.linalg.norm(Q @ A - W, ord = 'fro')
+            pro_distance = torch.linalg.norm(A @ O - W_centered, ord='fro')
             if pro_distance < min_distance_circles:
                 min_distance_circles = pro_distance
                 min_height_circles = height
@@ -167,13 +167,13 @@ def procrustes_calculations(model, step, dataset, config):
         for height in torch.linspace(0.1, 2, 40):
             A = create_column_matrix(height)
   
-            M = W @ A.T
+            W_centered = W - W.mean(dim=0, keepdim=True)
+            
+            M = A.T @ W_centered  # (3 × 3)
             U, S, Vt = torch.linalg.svd(M)
-  
-            #Optimal orthogonal matrix:
-            Q = U @ Vt
-  
-            pro_distance = torch.linalg.norm(Q @ A - W, ord = 'fro')
+            O = U @ Vt  # (3 × 3)
+
+            pro_distance = torch.linalg.norm(A @ O - W_centered, ord='fro')
             if pro_distance < min_distance_columns:
                 min_distance_columns = pro_distance
                 min_height_columns = height
