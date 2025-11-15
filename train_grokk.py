@@ -99,7 +99,7 @@ def create_column_matrix(height):
     points_per_column = n_out // n_columns  # 17 points per column
     
     # 3 columns at angles 0°, 120°, 240°
-    angles = torch.linspace(0, 2*torch.pi, n_columns, endpoint=False)
+    angles = torch.linspace(0, 2*torch.pi, n_columns + 1)[:-1]
     
     for angle in angles:
         # Position of this column in the x-y plane
@@ -116,7 +116,7 @@ def create_column_matrix(height):
             idx += 1
     
     # Center the entire configuration
-    A_centered = A - torch.mean(A, dim=0, keepdims=True)
+    A_centered = A - torch.mean(A, dim=0, keepdim=True)
     
     return A_centered
 
@@ -147,6 +147,7 @@ def procrustes_calculations(model, step, dataset, config):
 
         pca_3d = PCA(n_components=3, random_state=42)
         W = pca_3d.fit_transform(output_weights)
+        W = torch.from_numpy(pca_3d.fit_transform(output_weights))
 
         # First, Procrustes with two circles
         for height in torch.linspace(0.1, 2, 40):
@@ -404,13 +405,6 @@ def train(config):
             procrustes_calculations(model, step+1, dataset, config)
             
             # Log variance thresholds to wandb
-            if wandb_cfg['use_wandb']:
-                wandb_log = {}
-                for layer_name, (variance_thresholds, individual_variances) in all_layer_results.items():
-                    layer_key = layer_name.replace(" ", "_").replace("(", "").replace(")", "")
-                    for threshold, n_components in variance_thresholds.items():
-                        wandb_log[f"{layer_key}_components_for_{int(threshold*100)}pct"] = n_components
-                wandb.log(wandb_log, step=step+1)
             
             model.train()
 
