@@ -22,6 +22,7 @@ from mpl_toolkits.mplot3d import Axes3D
 
 import plotly.graph_objects as go
 import plotly.express as px
+from scipy.optimize import linear_sum_assignment
 
 class GroupDataset(IterableDataset):
     def __init__(self, dataset: AbstractDataset, split: str):
@@ -45,46 +46,61 @@ class GroupDataset(IterableDataset):
         return torch.tensor(x), torch.tensor(y)
 
 def create_circle_matrix(height):
-  
+    """
+    Create circle matrix with points ordered to match W structure.
+    
+    Structure:
+    - Bottom layer (z = -height/3):
+      - Point 0: center
+      - 8 islands with 2 points each, arranged in a circle
+    - Top layer (z = 2*height/3):
+      - 8 islands with 4 points each, arranged in a circle
+      (islands aligned above bottom islands)
+    """
     n_out = 51
-    idx = 0
-  
-    A = torch.zeros(n_out, 3)  # 3D coordinates (x, y, z)
-
-    # === BOTTOM CIRCLE (z = -r/3) ===
+    A = torch.zeros(n_out, 3)
+    
     z_bottom = -height / 3
-    
-    # Bottom center: 2 points at origin
-    for i in range(2):
-        A[idx, :] = torch.tensor([0, 0, z_bottom])
-        idx += 1
-    
-    # Bottom circle: 16 islands with 2 points each
-    angles = torch.linspace(0, 2*torch.pi, 16)
-
-    for angle in angles:
-        for j in range(2):
-            A[idx, 0] = torch.cos(angle)
-            A[idx, 1] = torch.sin(angle)
-            A[idx, 2] = z_bottom  # Bottom layer
-            idx += 1
-    
-    # === TOP CIRCLE (z = 2r/3) ===
     z_top = 2 * height / 3
     
-    # Top center: 1 point at origin (but elevated)
-    A[idx, :] = torch.tensor([0, 0, z_top])
-    idx += 1
+    # === BOTTOM LAYER ===
+    # Center point
+    A[0, :] = torch.tensor([0, 0, z_bottom])
     
-    # Top circle: 16 islands with 1 point each (aligned with bottom islands)
-    for angle in angles:  # Same angles as bottom circle
-        A[idx, 0] = torch.cos(angle)
-        A[idx, 1] = torch.sin(angle)
-        A[idx, 2] = z_top  # Top layer
-        idx += 1
+    # 8 bottom islands with 2 points each
+    bottom_islands = [
+        [3, 48], [18, 33], [6, 45], [15, 36], 
+        [12, 39], [21, 30], [24, 27], [42, 9]
+    ]
     
-    # The configuration is now already centered (mean z should be 0)
-    # But let's subtract mean anyway to be sure for x and y as well
+    angles_bottom = 2 * torch.pi * torch.arange(8) / 8
+    
+    for island_idx, (pt1, pt2) in enumerate(bottom_islands):
+        angle = angles_bottom[island_idx]
+        x = torch.cos(angle)
+        y = torch.sin(angle)
+        
+        A[pt1, :] = torch.tensor([x, y, z_bottom])
+        A[pt2, :] = torch.tensor([x, y, z_bottom])
+    
+    # === TOP LAYER ===
+    # 8 top islands with 4 points each (aligned with bottom islands)
+    top_islands = [
+        [14, 31, 20, 37], [1, 16, 35, 50], [11, 23, 28, 40], [2, 19, 32, 49],
+        [5, 22, 29, 46], [4, 13, 38, 47], [7, 10, 41, 44], [8, 25, 26, 43]
+    ]
+    
+    angles_top = angles_bottom  # Same angles as bottom
+    
+    for island_idx, island_points in enumerate(top_islands):
+        angle = angles_top[island_idx]
+        x = torch.cos(angle)
+        y = torch.sin(angle)
+        
+        for pt in island_points:
+            A[pt, :] = torch.tensor([x, y, z_top])
+    
+    # Center the configuration
     A_centered = A - torch.mean(A, dim=0, keepdim=True)
     
     return A_centered
@@ -149,31 +165,42 @@ def procrustes_calculations(model, step, dataset, config):
         W = pca_3d.fit_transform(output_weights)
         W = torch.from_numpy(pca_3d.fit_transform(output_weights))
 
+        W_centered = W - W.mean(dim=0, keepdim=True)
+
         # First, Procrustes with two circles
         for height in torch.linspace(0.1, 2, 40):
             A = create_circle_matrix(height)
-
-            W_centered = W - W.mean(dim=0, keepdim=True)
             
-            M = A.T @ W_centered  # (3 × 3)
+            # Find best 51×51 orthogonal matrix
+            M = A @ W_centered.T  # (51 × 51)
             U, S, Vt = torch.linalg.svd(M)
-            O = U @ Vt  # (3 × 3)
-
-            pro_distance = torch.linalg.norm(A @ O - W_centered, ord='fro')
+            O = U @ Vt  # (51 × 51)
+            
+            A_transformed = O @ A  # Apply to points
+            
+            # Optimal scaling
+            scale = torch.sum(W_centered * A_transformed) / torch.sum(A_transformed * A_transformed)
+            A_transformed = scale * A_transformed
+            
+            pro_distance = torch.linalg.norm(A_transformed - W_centered, ord='fro')
+            
             if pro_distance < min_distance_circles:
                 min_distance_circles = pro_distance
                 min_height_circles = height
 
         for height in torch.linspace(0.1, 2, 40):
             A = create_column_matrix(height)
-  
-            W_centered = W - W.mean(dim=0, keepdim=True)
             
-            M = A.T @ W_centered  # (3 × 3)
+            M = A @ W_centered.T
             U, S, Vt = torch.linalg.svd(M)
             O = U @ Vt  # (3 × 3)
 
-            pro_distance = torch.linalg.norm(A @ O - W_centered, ord='fro')
+            A_transformed = O @ A
+            scale = torch.sum(W_centered * A_transformed) / torch.sum(A_transformed * A_transformed)
+
+            A_transformed = scale * A_transformed
+
+            pro_distance = torch.linalg.norm(A_transformed - W_centered, ord='fro')
             if pro_distance < min_distance_columns:
                 min_distance_columns = pro_distance
                 min_height_columns = height
@@ -182,6 +209,91 @@ def procrustes_calculations(model, step, dataset, config):
         print(f"Minimum procrustes distance for circles: {min_distance_circles}, achieved at height {min_height_circles}")
         print(f"Minimum procrustes distance for columns: {min_distance_columns}, achieved at height {min_height_columns}")
 
+
+def procrustes_with_assignment(W, A):
+    """Find best permutation + rotation + scale"""
+    W_centered = W - W.mean(dim=0, keepdim=True)
+    A_centered = A - A.mean(dim=0, keepdim=True)
+    
+    # Compute pairwise distance matrix
+    # dist[i,j] = distance between A[i] and W[j]
+    dist_matrix = torch.cdist(A_centered, W_centered)  # (51 × 51)
+    
+    # Solve assignment problem (Hungarian algorithm)
+    row_ind, col_ind = linear_sum_assignment(dist_matrix.numpy())
+    
+    # Reorder W to match A
+    W_matched = W_centered[col_ind]
+    
+    # Now do standard 3D Procrustes
+    M = A_centered.T @ W_matched  # (3 × 3)
+    U, S, Vt = torch.linalg.svd(M)
+    R = U @ Vt
+    
+    # Apply rotation
+    A_transformed = A_centered @ R
+    
+    # Optimal scale
+    scale = torch.sum(W_matched * A_transformed) / torch.sum(A_transformed * A_transformed)
+    A_transformed = scale * A_transformed
+    
+    # Distance
+    distance = torch.linalg.norm(A_transformed - W_matched, ord='fro')
+    
+    return distance, scale, R, col_ind
+
+def procrustes_permutation_calculations(model, step, dataset, config):
+    model.eval()
+
+    min_distance_circles = 100
+    min_height_circles = 100
+    min_distance_columns = 100
+    min_height_columns = 100
+    
+    with torch.no_grad():
+        # Extract output layer weights - need to find the right layer
+        output_weights = None
+        
+        # Try different common patterns for the output layer
+        for name, module in model.named_modules():
+            if isinstance(module, torch.nn.Linear):
+                # Check if this is likely the output layer
+                if module.weight.shape[0] == dataset.n_out:
+                    output_weights = module.weight.detach().cpu().numpy()
+                    break
+        
+        # If we found weights, create visualization
+        if output_weights is not None:
+            n_out = dataset.n_out
+
+        pca_3d = PCA(n_components=3, random_state=42)
+        W = pca_3d.fit_transform(output_weights)
+        W = torch.from_numpy(pca_3d.fit_transform(output_weights))
+
+        W_centered = W - W.mean(dim=0, keepdim=True)
+
+
+        # First circles
+        for height in torch.linspace(0.1, 2, 40):
+            A = create_circle_matrix(height)
+            distance, scale, R, perm = procrustes_with_assignment(W_centered, A)
+            
+            if distance < min_distance_circles:
+                min_distance_circles = distance
+                min_height_circles = height
+
+        for height in torch.linspace(0.1, 2, 40):
+            A = create_columns_matrix(height)
+            distance, scale, R, perm = procrustes_with_assignment(W_centered, A)
+            
+            if distance < min_distance_columns:
+                min_distance_columns = distance
+                min_height_columns = height
+
+
+    print("="*70)
+    print(f"Minimum procrustes distance for circles: {min_distance_circles}, achieved at height {min_height_circles}")
+    print(f"Minimum procrustes distance for columns: {min_distance_columns}, achieved at height {min_height_columns}")
 
 
 def create_pca_visualization(model, step, dataset, config):
