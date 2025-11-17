@@ -12,6 +12,9 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 from load_objs import load_item
 
+from collections import Counter
+from sklearn.metrics import silhouette_score
+
 import numpy as np
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
@@ -23,6 +26,7 @@ from mpl_toolkits.mplot3d import Axes3D
 import plotly.graph_objects as go
 import plotly.express as px
 from scipy.optimize import linear_sum_assignment
+from sklearn.cluster import KMeans
 
 class GroupDataset(IterableDataset):
     def __init__(self, dataset: AbstractDataset, split: str):
@@ -295,6 +299,8 @@ def procrustes_permutation_calculations(model, step, dataset, config):
     print(f"Minimum procrustes distance for circles: {min_distance_circles}, achieved at height {min_height_circles}")
     print(f"Minimum procrustes distance for columns: {min_distance_columns}, achieved at height {min_height_columns}")
 
+from collections import Counter
+from sklearn.metrics import silhouette_score
 
 def create_pca_visualization(model, step, dataset, config):
     """
@@ -423,6 +429,397 @@ def create_pca_visualization(model, step, dataset, config):
                 
     model.train()
 
+from collections import Counter
+from sklearn.metrics import silhouette_score
+from sklearn.cluster import KMeans
+
+def comprehensive_2d_subspace_clustering_search(data, n_samples=1000, seed=42):
+    """
+    Search over random 2D subspaces and test for different cluster structures.
+    """
+    np.random.seed(seed)
+    n_features = data.shape[1]
+    n_points = data.shape[0]
+    
+    # Test different numbers of clusters
+    k_tests = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]
+    
+    best_results = {k: {'score': -np.inf, 'projection': None, 'labels': None, 'sizes': None} 
+                    for k in k_tests}
+    
+    k_preference_counts = {k: 0 for k in k_tests}
+    
+    print("Searching over 2D subspaces...")
+    
+    for iteration in range(n_samples):
+        if (iteration + 1) % 500 == 0:
+            print(f"  Iteration {iteration + 1}/{n_samples}")
+        
+        # Random 2D projection (orthonormal)
+        projection_matrix = np.random.randn(n_features, 2)
+        projection_matrix, _ = np.linalg.qr(projection_matrix)
+        
+        # Project data to 2D
+        data_2d = data @ projection_matrix
+        
+        # Try different cluster numbers
+        k_scores = {}
+        
+        for k in k_tests:
+            try:
+                # Cluster
+                kmeans = KMeans(n_clusters=k, random_state=42, n_init=3, max_iter=100)
+                labels = kmeans.fit_predict(data_2d)
+                
+                # Get cluster sizes
+                cluster_sizes = np.bincount(labels)
+                
+                # Compute silhouette score
+                if k > 1 and k < n_points:
+                    sil_score = silhouette_score(data_2d, labels)
+                else:
+                    sil_score = -1
+                
+                # Bonus for uniform cluster sizes
+                expected_size = n_points / k
+                size_uniformity = -np.std(cluster_sizes - expected_size)
+                
+                # Combined score
+                combined_score = sil_score + 0.1 * size_uniformity
+                
+                k_scores[k] = combined_score
+                
+                # Track best for each k
+                if combined_score > best_results[k]['score']:
+                    best_results[k]['score'] = combined_score
+                    best_results[k]['projection'] = projection_matrix.copy()
+                    best_results[k]['labels'] = labels.copy()
+                    best_results[k]['sizes'] = cluster_sizes.copy()
+                
+            except Exception as e:
+                k_scores[k] = -np.inf
+        
+        # Which k won for this projection?
+        best_k = max(k_scores, key=k_scores.get)
+        k_preference_counts[best_k] += 1
+    
+    # Summary statistics
+    print("\n" + "="*70)
+    print("2D SUBSPACE SEARCH RESULTS")
+    print("="*70)
+    
+    print(f"\nOut of {n_samples} random 2D projections:")
+    for k in k_tests:
+        count = k_preference_counts[k]
+        percentage = 100 * count / n_samples
+        print(f"  k={k:2d}: {count:5d} times ({percentage:5.2f}%)")
+    
+    print(f"\nBest results for each k:")
+    for k in k_tests:
+        best = best_results[k]
+        print(f"\n  k={k}:")
+        print(f"    Best silhouette score: {best['score']:.4f}")
+        print(f"    Cluster sizes: {best['sizes']}")
+        if k == 17:
+            all_size_3 = np.all(best['sizes'] == 3)
+            print(f"    All clusters size 3? {all_size_3}")
+        elif k == 3:
+            all_size_17 = np.all(best['sizes'] == 17)
+            print(f"    All clusters size 17? {all_size_17}")
+    
+    return best_results, k_preference_counts
+
+
+def visualize_best_2d_projections(data, best_results, step, k_tests=[3, 17]):
+    """
+    Visualize the data in the best 2D projections for different k values
+    """
+    fig, axes = plt.subplots(1, len(k_tests), figsize=(15, 6))
+    
+    if len(k_tests) == 1:
+        axes = [axes]
+    
+    for idx, k in enumerate(k_tests):
+        best = best_results[k]
+        projection = best['projection']
+        labels = best['labels']
+        
+        # Project data
+        data_2d = data @ projection
+        
+        # Plot
+        scatter = axes[idx].scatter(data_2d[:, 0], data_2d[:, 1],
+                                   c=labels, cmap='tab20', s=100, alpha=0.7, edgecolors='black')
+        
+        # Add point labels
+        for i in range(len(data_2d)):
+            axes[idx].text(data_2d[i, 0], data_2d[i, 1], str(i), 
+                         fontsize=8, ha='center', va='center')
+        
+        axes[idx].set_title(f'Best 2D projection for k={k}\nSilhouette: {best["score"]:.3f}')
+        axes[idx].set_xlabel('Projection 1')
+        axes[idx].set_ylabel('Projection 2')
+        axes[idx].grid(True, alpha=0.3)
+        
+        # Add colorbar
+        plt.colorbar(scatter, ax=axes[idx], label='Cluster')
+    
+    plt.tight_layout()
+    filename = f'2d_subspace_clustering_step_{step}.png'
+    plt.savefig(filename, dpi=150, bbox_inches='tight')
+    print(f"\n2D Visualization saved as '{filename}'")
+    plt.close()
+    
+    return filename
+
+
+def subspace_clustering_analysis(model, step, dataset, config):
+    """
+    2D subspace clustering analysis
+    """
+    model.eval()
+    
+    with torch.no_grad():
+        # Extract output weights
+        output_weights = None
+        for name, module in model.named_modules():
+            if isinstance(module, torch.nn.Linear):
+                if module.weight.shape[0] == dataset.n_out:
+                    output_weights = module.weight.detach().cpu().numpy()
+                    break
+        
+        if output_weights is not None:
+            print(f"\n{'='*70}")
+            print(f"2D SUBSPACE CLUSTERING ANALYSIS - Step {step}")
+            print(f"{'='*70}")
+
+            n_pca_components = 3
+            pca_reduce = PCA(n_components=n_pca_components)
+            search_data = pca_reduce.fit_transform(output_weights)
+            variance_explained = pca_reduce.explained_variance_ratio_.sum()
+            print(f"Reduced to {n_pca_components}D ({variance_explained:.1%} variance)")
+
+            
+            # 2D analysis
+            best_2d, k_counts_2d = comprehensive_2d_subspace_clustering_search(
+                search_data, n_samples=1000, seed=42
+            )
+            
+            # Visualize
+            viz_filename = visualize_best_2d_projections(search_data, best_2d, step, k_tests=[3, 17])
+            
+            # Summary
+            
+            # Log to wandb if enabled
+            if config['wandb']['use_wandb']:
+                wandb.log({
+                    '2d_k3_preference_pct': 100 * k_counts_2d[3] / 1000,
+                    '2d_k17_preference_pct': 100 * k_counts_2d[17] / 1000,
+                    '2d_best_k17_silhouette': best_2d[17]['score'],
+                    '2d_best_k3_silhouette': best_2d[3]['score'],
+                    '2d_visualization': wandb.Image(viz_filename),
+                }, step=step)
+            
+            return best_2d, k_counts_2d
+    
+    model.train()
+    return None, None
+
+def check_ground_truth_clustering(model, step, dataset, config):
+    """
+    Check if known equivalence classes (mod 3 and mod 17) cluster well
+    """
+    model.eval()
+    
+    with torch.no_grad():
+        # Extract output weights
+        output_weights = None
+        for name, module in model.named_modules():
+            if isinstance(module, torch.nn.Linear):
+                if module.weight.shape[0] == dataset.n_out:
+                    output_weights = module.weight.detach().cpu().numpy()
+                    break
+        
+        if output_weights is not None:
+            n_out = dataset.n_out
+            
+            print(f"\n{'='*70}")
+            print(f"GROUND TRUTH CLUSTERING ANALYSIS - Step {step}")
+            print(f"{'='*70}")
+            
+            # Define ground truth labels
+            labels_mod3 = np.array([i % 3 for i in range(n_out)])   # 3 clusters of 17
+            labels_mod17 = np.array([i % 17 for i in range(n_out)]) # 17 clusters of 3
+            
+            print(f"\nMod 3 clusters: {np.bincount(labels_mod3)}")
+            print(f"Mod 17 clusters: {np.bincount(labels_mod17)}")
+            
+            # Optionally reduce dimension first
+            pca_reduce = PCA(n_components=3)
+            data = pca_reduce.fit_transform(output_weights)
+            variance_explained = pca_reduce.explained_variance_ratio_.sum()
+            print(f"\nReduced to 3D ({variance_explained:.1%} variance)")
+
+            
+            # Method 1: Silhouette Score (higher = better clustering)
+            from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
+            
+            sil_mod3 = silhouette_score(data, labels_mod3)
+            sil_mod17 = silhouette_score(data, labels_mod17)
+            
+            print(f"\n--- Silhouette Score (higher is better, range [-1, 1]) ---")
+            print(f"Mod 3 (3 clusters):  {sil_mod3:.4f}")
+            print(f"Mod 17 (17 clusters): {sil_mod17:.4f}")
+            
+            # Method 2: Davies-Bouldin Index (lower = better clustering)
+            db_mod3 = davies_bouldin_score(data, labels_mod3)
+            db_mod17 = davies_bouldin_score(data, labels_mod17)
+            
+            print(f"\n--- Davies-Bouldin Index (lower is better) ---")
+            print(f"Mod 3 (3 clusters):  {db_mod3:.4f}")
+            print(f"Mod 17 (17 clusters): {db_mod17:.4f}")
+            
+            # Method 3: Calinski-Harabasz Score (higher = better clustering)
+            ch_mod3 = calinski_harabasz_score(data, labels_mod3)
+            ch_mod17 = calinski_harabasz_score(data, labels_mod17)
+            
+            print(f"\n--- Calinski-Harabasz Score (higher is better) ---")
+            print(f"Mod 3 (3 clusters):  {ch_mod3:.4f}")
+            print(f"Mod 17 (17 clusters): {ch_mod17:.4f}")
+            
+            # Method 4: Within-cluster vs between-cluster variance ratio
+            def cluster_separation_ratio(data, labels):
+                """Higher ratio = better clustering"""
+                unique_labels = np.unique(labels)
+                
+                # Within-cluster variance
+                within_var = 0
+                for label in unique_labels:
+                    cluster_points = data[labels == label]
+                    cluster_center = cluster_points.mean(axis=0)
+                    within_var += np.sum((cluster_points - cluster_center) ** 2)
+                
+                # Between-cluster variance
+                global_center = data.mean(axis=0)
+                between_var = 0
+                for label in unique_labels:
+                    cluster_points = data[labels == label]
+                    cluster_center = cluster_points.mean(axis=0)
+                    n_points = len(cluster_points)
+                    between_var += n_points * np.sum((cluster_center - global_center) ** 2)
+                
+                # Ratio (higher is better)
+                ratio = between_var / within_var if within_var > 0 else 0
+                return ratio, within_var, between_var
+            
+            ratio_mod3, within_mod3, between_mod3 = cluster_separation_ratio(data, labels_mod3)
+            ratio_mod17, within_mod17, between_mod17 = cluster_separation_ratio(data, labels_mod17)
+            
+            print(f"\n--- Between/Within Cluster Variance Ratio (higher is better) ---")
+            print(f"Mod 3 (3 clusters):  {ratio_mod3:.4f}")
+            print(f"Mod 17 (17 clusters): {ratio_mod17:.4f}")
+            
+            # Method 5: Find best 2D projection for each clustering
+            print(f"\n--- Best 2D Projections ---")
+            
+            # For mod 3
+            best_proj_mod3, best_score_mod3 = find_best_2d_projection_for_labels(
+                data, labels_mod3, n_samples=1000
+            )
+            print(f"Best silhouette for mod 3 in 2D: {best_score_mod3:.4f}")
+            
+            # For mod 17
+            best_proj_mod17, best_score_mod17 = find_best_2d_projection_for_labels(
+                data, labels_mod17, n_samples=1000
+            )
+            print(f"Best silhouette for mod 17 in 2D: {best_score_mod17:.4f}")
+            
+            # Summary
+            print(f"\n{'='*70}")
+            print("SUMMARY")
+            print(f"{'='*70}")
+            
+            # Count which metrics favor which clustering
+            mod3_wins = 0
+            mod17_wins = 0
+            
+            if sil_mod3 > sil_mod17:
+                mod3_wins += 1
+                print("Silhouette: Mod 3 wins")
+            else:
+                mod17_wins += 1
+                print("Silhouette: Mod 17 wins")
+            
+            if db_mod3 < db_mod17:  # Lower is better
+                mod3_wins += 1
+                print("Davies-Bouldin: Mod 3 wins")
+            else:
+                mod17_wins += 1
+                print("Davies-Bouldin: Mod 17 wins")
+            
+            if ch_mod3 > ch_mod17:
+                mod3_wins += 1
+                print("Calinski-Harabasz: Mod 3 wins")
+            else:
+                mod17_wins += 1
+                print("Calinski-Harabasz: Mod 17 wins")
+            
+            if ratio_mod3 > ratio_mod17:
+                mod3_wins += 1
+                print("Variance Ratio: Mod 3 wins")
+            else:
+                mod17_wins += 1
+                print("Variance Ratio: Mod 17 wins")
+            
+            print(f"\nOverall: Mod 3 wins {mod3_wins}/4 metrics, Mod 17 wins {mod17_wins}/4 metrics")
+            
+            # Log to wandb
+            if config['wandb']['use_wandb']:
+                wandb.log({
+                    'mod3_silhouette': sil_mod3,
+                    'mod17_silhouette': sil_mod17,
+                    'mod3_davies_bouldin': db_mod3,
+                    'mod17_davies_bouldin': db_mod17,
+                    'mod3_calinski_harabasz': ch_mod3,
+                    'mod17_calinski_harabasz': ch_mod17,
+                    'mod3_variance_ratio': ratio_mod3,
+                    'mod17_variance_ratio': ratio_mod17,
+                    'mod3_best_2d_silhouette': best_score_mod3,
+                    'mod17_best_2d_silhouette': best_score_mod17,
+                    'mod3_wins': mod3_wins,
+                    'mod17_wins': mod17_wins,
+                }, step=step)
+    
+    model.train()
+
+
+def find_best_2d_projection_for_labels(data, labels, n_samples=1000):
+    """Find the 2D projection that best separates given labels"""
+    np.random.seed(42)
+    n_features = data.shape[1]
+    
+    best_score = -np.inf
+    best_projection = None
+    
+    for _ in range(n_samples):
+        # Random 2D projection
+        projection = np.random.randn(n_features, 2)
+        projection, _ = np.linalg.qr(projection)
+        
+        # Project data
+        data_2d = data @ projection
+        
+        # Score the projection with given labels
+        try:
+            score = silhouette_score(data_2d, labels)
+            if score > best_score:
+                best_score = score
+                best_projection = projection
+        except:
+            pass
+    
+    return best_projection, best_score
+
 
 def train(config):
     print('Using config:', config)
@@ -479,7 +876,7 @@ def train(config):
             model.train()
 
         # Print summary and evaluate every 10000 steps
-        if (step+1) % 500 == 0:
+        if (step+1) % 2000 == 0:
             # Compute validation and training accuracy
             model.eval()
             with torch.no_grad():
@@ -514,9 +911,11 @@ def train(config):
             create_pca_visualization(model, step+1, dataset, config)
 
             # Procrustes calculations
-            procrustes_calculations(model, step+1, dataset, config)
+            # procrustes_calculations(model, step+1, dataset, config)
             
-            # Log variance thresholds to wandb
+            #subspace_clustering_analysis(model, step+1, dataset, config)
+
+            check_ground_truth_clustering(model, step+1, dataset, config)
             
             model.train()
 
