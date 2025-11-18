@@ -192,7 +192,7 @@ def comprehensive_2d_subspace_clustering_search(data, n_samples=1000, seed=42):
     n_points = data.shape[0]
     
     # Test different numbers of clusters
-    k_tests = list(range(2, n_points//2+1))
+    k_tests = list(range(2, n_points//3+1))
     
     best_results = {k: {'ch_score': -np.inf, 'projection': None, 'labels': None} 
                     for k in k_tests}
