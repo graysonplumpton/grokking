@@ -359,7 +359,7 @@ def subspace_clustering_analysis(model, step, dataset, config):
             print(f"2D SUBSPACE CLUSTERING ANALYSIS - Step {step}")
             print(f"{'='*70}")
 
-            n_pca_components = 12
+            n_pca_components = 20
             pca_reduce = PCA(n_components=n_pca_components)
             search_data = pca_reduce.fit_transform(output_weights)
             variance_explained = pca_reduce.explained_variance_ratio_.sum()
