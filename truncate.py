@@ -143,7 +143,8 @@ def reset_optimizer_for_layer(optim, layer):
                 state['exp_avg'].zero_()
             if 'exp_avg_sq' in state:
                 state['exp_avg_sq'].zero_()
-  def train(config):
+
+def train(config):
     print('Using config:', config)
     train_cfg = config['train']
     wandb_cfg = config['wandb']
