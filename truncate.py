@@ -143,23 +143,17 @@ def reset_optimizer_for_layer(optim, layer):
                 state['exp_avg'].zero_()
             if 'exp_avg_sq' in state:
                 state['exp_avg_sq'].zero_()
-            if 'step' in state:
-                state['step'] = torch.tensor(0.0)
-            reset_count += 1
-    print(f"Reset optimizer state for {reset_count} parameter tensors")
-
-
-def train(config):
+  def train(config):
     print('Using config:', config)
     train_cfg = config['train']
     wandb_cfg = config['wandb']
     
-    truncate_at_step = config.get('truncate_at_step', None)
+    truncate_steps = set(config.get('truncate_steps', []))
     truncate_k = config.get('truncate_k', 20)
     reset_optimizer_on_truncate = config.get('reset_optimizer_on_truncate', True)
     
-    if truncate_at_step is not None:
-        print(f"\n*** SVD truncation enabled: k={truncate_k} at step {truncate_at_step} ***\n")
+    if truncate_steps:
+        print(f"\n*** SVD truncation enabled: k={truncate_k} at steps {sorted(truncate_steps)} ***\n")
     
     if wandb_cfg['use_wandb']:
         wandb.init(project=wandb_cfg['wandb_project'], config=config)
@@ -181,18 +175,27 @@ def train(config):
     )
     
     step = 0
-    truncation_applied = False
+    truncations_applied = []
 
     for x, y in train_dataloader:
-        # Apply truncation if scheduled
-        if truncate_at_step and not truncation_applied and step >= truncate_at_step:
+        # Apply truncation if this step is in the list
+        if step in truncate_steps:
             output_layer = truncate_output_layer(model, truncate_k)
             if reset_optimizer_on_truncate:
                 reset_optimizer_for_layer(optim, output_layer)
-            truncation_applied = True
+            truncations_applied.append(step)
             
             if wandb_cfg['use_wandb']:
                 wandb.log({"truncation/applied_at_step": step, "truncation/k": truncate_k}, step=step)
+            
+            # Evaluate immediately after truncation
+            model.eval()
+            post_trunc_acc = evaluate_accuracy(model, val_dataloader, device,
+                                               max_batches=train_cfg['eval_batches'])
+            print(f"Validation accuracy after truncation: {post_trunc_acc:.4f}")
+            if wandb_cfg['use_wandb']:
+                wandb.log({"truncation/post_truncation_val_acc": post_trunc_acc}, step=step)
+            model.train()
         
         # Training step
         loss, logs = model.get_loss(x.to(device), y.to(device))
@@ -232,8 +235,8 @@ def train(config):
             
             print(f"\n{'='*60}")
             print(f"Step {step + 1:,}")
-            if truncation_applied:
-                print(f"[Truncated to k={truncate_k} at step {truncate_at_step}]")
+            if truncations_applied:
+                print(f"[Truncated to k={truncate_k} at steps {truncations_applied}]")
             print(f"Val Accuracy: {val_combined.get('accuracy', 0.0):.4f}")
             print(f"{'='*60}")
             
@@ -245,6 +248,8 @@ def train(config):
             break
 
     print(f"\nTraining completed at step {step}")
+    if truncations_applied:
+        print(f"Truncations applied at steps: {truncations_applied}")
     if wandb_cfg['use_wandb']:
         wandb.finish()
 
