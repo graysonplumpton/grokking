@@ -223,9 +223,11 @@ def train(config):
         if (step + 1) % 2000 == 0:
             model.eval()
             with torch.no_grad():
-                val_logs = [model.get_loss(val_x.to(device), val_y.to(device))[1] 
-                            for i, (val_x, val_y) in enumerate(val_dataloader) 
-                            if i < train_cfg['eval_batches']]
+                val_logs = []
+                for i, (val_x, val_y) in enumerate(val_dataloader):
+                    if i >= train_cfg['eval_batches']:
+                        break
+                    val_logs.append(model.get_loss(val_x.to(device), val_y.to(device))[1])
                 val_combined = combine_logs(val_logs)
             
             print(f"\n{'='*60}")
